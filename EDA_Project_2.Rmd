@@ -1,0 +1,737 @@
+
+
+---
+title: "EDA of New Mexico Dataset by Andrew Martin"
+output:
+  html_document:
+    toc: true
+    toc_depth: 2
+theme: united
+---
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, packages}
+
+library(ggplot2)
+library(GGally)
+library(scales)
+library(memisc)
+library(RColorBrewer)
+library(bitops)
+library(RCurl)
+library(gridExtra)
+library(dplyr)
+library(alr3)
+library(reshape2)
+library(gridExtra)
+library(Rcpp)
+library(knitr)
+library(scales)
+library(lubridate)
+library(RColorBrewer)
+library(MASS)
+library(aod)
+library(ResourceSelection)
+library(rmarkdown)
+```
+
+```{r echo=FALSE, Load_the_Data}
+# Functions
+
+# Create Clean and Dirty Functions to modify candidate names for graphs
+clean <- function(df){
+levels(df$cand_nm) <- gsub(" ", "\n", levels(df$cand_nm))
+return(df)
+}
+
+dirty <- function(df){
+levels(df$cand_nm) <- gsub("\n", " ", levels(df$cand_nm))
+return(df)
+}
+
+# Create clevels Function to avoid repetition in changing the factor levels
+
+clevels <- function(df,old,new){
+levels(df$contbr_employer) <- gsub(old, new, levels(df$contbr_employer))
+return(df)
+}
+
+# Data
+
+# Load the Data
+nm <- read.csv('nm.csv')
+
+# Create Candidate Gender and Candidate Political Party Variables
+
+cond_dem <- c("Clinton, Hillary Rodham",
+              "Sanders, Bernard", 
+              "Lessig, Lawrence", 
+              "O'Malley, Martin Joseph",
+              "Webb, James Henry Jr.")
+
+cond_fem <- c("Clinton, Hillary Rodham",
+              "Fiorina, Carly")
+
+nm$cand_par <- ifelse(nm$cand_nm %in% cond_dem, 'Democrat', 'Republican')
+nm$cand_par <- as.factor(nm$cand_par)
+
+nm$cand_gen <- ifelse(nm$cand_nm %in% cond_fem, 'Female', 'Male')
+nm$cand_gen <- as.factor(nm$cand_gen)
+
+# Modify 'contb_receipt_dt' variable to usable Date Variable
+
+nm$contb_receipt_dt <- as.Date(nm$contb_receipt_dt, "%d-%B-%y")
+
+# Create Popular Candidates DataFrame
+  #1# Create Group-By and Summary DataFrames
+nm_popular_gb <- group_by(nm, cand_nm)
+
+nm_pop_summary <- summarise(nm_popular_gb,
+                cand_total = sum(contb_receipt_amt),
+                count = n())
+
+nm_pop_summary <- subset(nm_pop_summary, count > 25)
+  #2# Create DataFrame
+nm_pop <- as.data.frame(subset(nm,nm$cand_nm %in% nm_pop_summary$cand_nm))
+  #3# Remove Old Factor Levels
+nm_pop$cand_nm <- factor(nm_pop$cand_nm)
+
+# Create Simplified Employer DataFrame
+  #1# Modify Factor Names ready for Grouping
+nm_change_jobs <- nm_pop
+
+nm_change_jobs <- clevels(nm_change_jobs,"SELF-EMPLOYED","SELF")
+nm_change_jobs <- clevels(nm_change_jobs,"SELF EMPLOYED","SELF")
+nm_change_jobs <- clevels(nm_change_jobs,"NONE", "NOT EMPLOYED")
+nm_change_jobs <- clevels(nm_change_jobs,"SELF", "SELF-EMPLOYED")
+nm_change_jobs <- clevels(nm_change_jobs,
+                          "INFORMATION REQUESTED PER BEST EFFORTS", "N/A")
+nm_change_jobs <- clevels(nm_change_jobs,"INFORMATION REQUESTED", "N/A")
+nm_change_jobs <- clevels(nm_change_jobs,"N/A", NA)
+
+nm_change_jobs <- subset(nm_change_jobs, !is.na(nm_change_jobs$contbr_employer))
+  
+  #2# Change all bar Retired, Not Employed, Self-Employed and Homemaker into           Employed
+
+nm_change_jobs$contbr_employer <- as.character(nm_change_jobs$contbr_employer)
+
+nm_change_jobs$contbr_employer[nm_change_jobs$contbr_employer != "RETIRED" &
+                  nm_change_jobs$contbr_employer != "NOT EMPLOYED" &
+                  nm_change_jobs$contbr_employer != "SELF-EMPLOYED" &                              nm_change_jobs$contbr_employer != "HOMEMAKER"] <- "EMPLOYED"
+
+nm_change_jobs$contbr_employer <- as.factor(nm_change_jobs$contbr_employer)
+
+
+# Create Simplified Cities DataFrame
+cond_city = c("ALBUQUERQUE", "SANTA FE", "LAS CRUCES", "RIO RANCHO")
+
+nm_pop_other_cities <- nm_pop
+
+nm_pop_other_cities$contbr_city <- 
+  ifelse(nm_pop_other_cities$contbr_city %in% cond_city,
+  as.character(nm_pop_other_cities$contbr_city) , 'OTHER')
+
+nm_pop_other_cities$contbr_city <- as.factor(nm_pop_other_cities$contbr_city)
+
+nm_pop_other_cities$contbr_city <- factor(nm_pop_other_cities$contbr_city)
+
+# Create Simplified Cities and Simplified Jobs DataFrame
+
+nm_simplified <- nm_change_jobs
+
+nm_simplified$contbr_city <- 
+  ifelse(nm_simplified$contbr_city %in% cond_city,
+  as.character(nm_simplified$contbr_city) , 'OTHER')
+
+nm_simplified$contbr_city <- as.factor(nm_simplified$contbr_city)
+
+nm_simplified$contbr_city <- factor(nm_simplified$contbr_city)
+
+nm_simplified_pos <- subset(nm_simplified, nm_simplified$contb_receipt_amt >0)
+
+# Create 'Over Simplified' DataFrame
+nm_u_simplified <- nm_simplified
+
+nm_u_simplified <- clevels(nm_u_simplified,"HOMEMAKER", "NOT EMPLOYED")
+
+# Create Cumulative Totals DataFrame
+  #1# Create Segmented Dates and Cumulative Vectors for new DataFrame
+
+date_periods <- seq(as.Date("2015-04-01"), as.Date("2015-10-01"), "2 weeks")
+
+cumu_name <- c()
+cumu_period <- c()
+cumu_total <- c()
+cumu_par <- c()
+cumu_period_total <- c()
+cumu_period_party_total <- c()
+
+  #2# Loop through to create segmented cumulative totals
+
+for (i in as.character(nm_pop_summary$cand_nm)) {
+for (j in date_periods) {
+cumu_name <- append(cumu_name, i)
+
+cumu_period <- append(cumu_period, as.Date(j, origin = "1970-01-01"))
+
+cumu_total <- append(cumu_total, 
+              as.numeric(summarise(filter(nm_pop, nm_pop$cand_nm == i &
+              nm_pop$contb_receipt_dt < as.Date(j, origin = "1970-01-01")),
+              sum(contb_receipt_amt))))
+
+cumu_par_cons <- ifelse(i %in% cond_dem, 'Democrat', 'Republican')
+
+cumu_par <- append(cumu_par, cumu_par_cons)
+
+cumu_period_total_value <- 
+  subset(nm_pop, 
+         nm_pop$cand_par == cumu_par_cons & 
+         nm_pop$contb_receipt_dt < as.Date(j, origin = "1970-01-01"))
+  
+cumu_period_total <- 
+  append(cumu_period_total, 
+         as.numeric(summarise(cumu_period_total_value,
+         sum(cumu_period_total_value$contb_receipt_amt))))
+
+}} 
+
+  #3# Use vectors to create DataFrame
+
+nm_cumu_cand <- data.frame(cumu_name, 
+                           cumu_period, 
+                           cumu_total, 
+                           cumu_par, 
+                           cumu_period_total)
+```
+
+# Introduction to Data Set
+```{r echo=FALSE, Intro_Data}
+str(nm)
+
+summary(nm)
+
+pos_con <- subset(nm$contb_receipt_amt, nm$contb_receipt_amt > 0)
+```
+
+The original data set contains 3245 observations of 18 variables, of which 15 are factors, one number and two integer variables. To begin with I added two more factor variables, denoting the gender and political affiliation of the candidate to which the donation is going to. I also modified the 'contb_receipt_dt' factor variable to a date variable for better ease of use in exploring the data.
+
+**Summary of Contributions (Not including refunds)**
+```{r echo=FALSE, Intro_Data_2}
+summary(pos_con)
+```
+
+**Summary of Contributions (Including refunds)**
+```{r echo=FALSE, Intro_Data_3}
+summary(nm$contb_receipt_amt)
+```
+
+The candidate that has had the most contributions in terms of individual receipts is Bernard Sanders with approximately one third of all contributions. Robert Brito is responsible for 45 separate contributions, the most of any contributor. The aspect of the data that is most interesting at this very early stage is the actual amounts of contribution, the mean is 235.5 however 75% of the data is below 169.8 showing a large skew to be investigated. 
+However, this data contains a couple of negative values caused by refunds given for various reasons, by taking those out, the mean of the contributions rises to 248.1 and 75% of the data is now below 200.
+
+# Exploritory Data Analysis
+
+## Univariate Plots Section
+
+**Histogram of Contribution Values**
+
+```{r echo=FALSE, Initial_Histogram}
+ggplot(data=nm, aes(x=contb_receipt_amt)) + 
+  geom_histogram(binwidth = diff(range(nm$contb_receipt_amt))/30)
+```
+
+To begin with I plotted a simple histogram looking at the count of different contribution values in the data, which reveals two things of interest. The first is that, as the summary of the data suggested, a lot of the contributions are very small. The second was a lot more surprising, there is one bin near the $3000 dollar mark that is strangely high. It is worth further analysis.
+
+```{r echo=FALSE, Initial_Zoomed}
+ggplot(data=nm, aes(x=contb_receipt_amt)) + 
+  geom_histogram(binwidth=5) + 
+  scale_x_continuous(limits = c(0,120), breaks = seq(0,120,10)) 
+```
+
+Zooming in on the same histogram, the only information to be gained is that most of the contributions tend to be in 'round number' amounts, such as $50 or $100.
+
+```{r echo=FALSE, Exploring_Outliers_Histogram}
+ggplot(data=nm, aes(x=contb_receipt_amt)) + 
+  geom_histogram(binwidth=5) + 
+  scale_x_continuous(limits = c(2690,2710), breaks = seq(2690,2710,5)) 
+```
+
+My attention turned to the unusual bar near the $3000 dollar mark that all fitted into one bin. So focusing on that area yielded this graph. This seemed fairly odd, and my first thought is something along the lines of a legal cap on contributions and $2700 is that limit. 
+
+Being unfamiliar with the laws of the US, a quick Google search indicated that, yes, that is in fact the contribution limit an individual may give to a candidate per election. It also explains why there are a lot of -$2700 refunds given, as shown in the first histogram. Individuals either trying to cheat the system or are ignorant of it and have had their money returned.
+
+**Histogram of Contributions By Date**
+```{r echo=FALSE, Contribution_Timing_Histogram}
+ggplot(data=nm, aes(x=contb_receipt_dt)) + 
+  geom_histogram(binwidth=7) + 
+  scale_x_date(breaks = date_breaks("8 weeks"), 
+               limits = c(as.Date("2015-04-01"), as.Date("2015-10-01")))
+```
+
+Changing tack to move on to when contributions were given, I plotted contribution dates producing this graph. As to be expected, the further along the electoral process, the more contributions are given to the candidates, with one notable exception around the end of June 2015, which may be worth looking into in more detail.
+
+**Number of Contributions by Candidate**
+```{r echo=FALSE, Contribution_Candidate_Histogram}
+summary(nm$cand_nm)
+```
+
+As can be seen, there are 19 different candidates that have received at least one contribution in this dataset. This could prove to be an issue in later analysis so I chose to modify the dataset to only focus on candidates with at least 25 contributions, narrowing the field down to just 8 candidates.
+
+**Number of Contributions for the most popular Candidates**
+
+```{r echo=FALSE, Contribution_Candidate_Histogram_2}
+nm_pop_summary <- clean(nm_pop_summary)
+
+ggplot(data=nm_pop_summary, aes(x=cand_nm, y=count)) + 
+  geom_bar(stat="identity")
+
+nm_pop_summary <- dirty(nm_pop_summary)
+```
+
+```{r echo=FALSE, Contribution_Candidate_Histogram_3}
+summary(nm_pop$cand_nm)
+```
+
+From this plot we can see that four candidates make up the bulk of the contributions in this dataset. They are Benjamin S. Carson, Hillary Rodham Clinton, Rafael Edward Cruz and Bernard Sanders. The only other candidate to amass a contribution count above 100 is Carly Fiorina with 126.
+
+**Contributions by Party**
+
+```{r echo=FALSE, Contribution_By_Party}
+ggplot(data=nm, aes(x=cand_par)) + 
+  geom_histogram()
+
+summary(nm$cand_par)
+```
+
+**Contributions by Gender of Candidate**
+
+```{r echo=FALSE, Contribution_By_Gender}
+ggplot(data=nm, aes(x=cand_gen)) + 
+  geom_histogram()
+
+summary(nm$cand_gen)
+```
+
+**Contributions by City**
+
+```{r echo=FALSE, Contribution_By_City}
+ggplot(data=nm_simplified, aes(x=contbr_city)) + 
+  geom_histogram()
+
+summary(nm_simplified$contbr_city)
+```
+
+There are 1771 Democratic contributions to 1474 Republican ones and 824 Female contributions to 2421 Male ones. These are perhaps not so surprising, as the state winner for both 2012 and 2008 has been a Democrat and there are only two female candidates in the New Mexico data.
+
+As for the contributions by city, I had to decide whether to keep all 118 factors from the data or to remove them. Both seemed like a very unsatisfactory outcome as aside from the four largest cities of Albuquerque, Las Cruces, Rio Rancho and Santa Fe, over 1000 observations came from elsewhere. I decided to compromise by grouping all of these smaller cities into one new factor called 'Other'.
+
+## Univariate Analysis
+
+### What is the structure of your dataset?
+
+There are 3245 contributions in the dataset with 18 variables plus the extra two I created to make 20. They are mostly factor variables with the notable exceptions of 'contb_receipt_dt' which I manually turned into a date variable, and the 'contb_receipt_amt' which is a number variable. 
+
+### What is/are the main feature(s) of interest in your dataset?
+
+The main features are the number variable 'contb_receipt_amt' which is the value of the contribution in dollars and the date variable 'contb_receipt_dt' which is when the contribution was made . How these variables change in relation to explanatory variables such as candidate, city or occupation will be the most interesting aspect of the dataset. 
+
+### What other features in the dataset do you think will help support your investigation into your feature(s) of interest?
+
+The candidates political affiliation to either the Democratic or Republican parties, along with their gender will both be interesting to see if they too have any impact on the contribution amount.
+
+I also feel that contributor city will also play an interesting role in my investigation looking at the comparison between the bigger and smaller, so called, 'other' cities.
+
+### Did you create any new variables from existing variables in the dataset?
+
+I created two new variables, both factor variables. The first marked each contribution as to whether it went to a Democrat or Republican candidate called 'cand_par'. The other was indicating whether it went to a Male or Female candidate, 'cand_gen'. Both of these looked at the name of the candidate in 'cand_nm' and then using an ifelse statement checked against a vector of candidates belonging to a particular factor and assigned values accordingly.
+
+### Of the features you investigated, were there any unusual distributions? Did you perform any operations on the data to tidy, adjust, or change the form of the data? If so, why did you do this?
+
+Yes, I modified the variable 'contb_receipt_dt' to a date from a character string/factor variable. I did this because it was hard to aggregate the data when in factor form, by making it a date variable, I could create larger bins for my histogram. I also anticipate that I will use it in upcoming analysis so making it as easy as possible to work with was necessary.
+
+I also modified the 'contbr_city' variable, which contained the city from which the contribution came from. I modified the 118 factor levels down to just 5, the original 4 largest and the fifth being an amalgamation of the other 114. This was done as a compromise between being fair to the dataset and at the same time being able to use this variable to do analysis on.
+
+
+## Bivariate Plots Section
+
+**Boxplot data of Candidate vs Receipt Amount**
+```{r echo=FALSE, Initial_Candidate_Vs_Receipt_Plot}
+nm_pop <- clean(nm_pop)
+
+ggplot(data=subset(nm_pop,contb_receipt_amt >0 & contb_receipt_amt < 2700),
+       aes(x=cand_nm, y=contb_receipt_amt)) + 
+  geom_boxplot()
+
+```
+
+To begin the bivariate analysis, in my mind the obvious place to start was plotting candidate against contribution amount, to create this graph. The most striking part for me is the IQR for Jeb Bush is substantially higher then for anyone else. However, this is to be expected due to this candidate only having 27 contributions. As for Hillary Clinton though, having the next largest IQR and a lot of contributions suggests her total contributions to be much higher, this will need to be investigated more.
+
+```{r echo=FALSE, Zoomed_Candidate_Vs_Receipt_Plot}
+ggplot(data=subset(nm_pop,contb_receipt_amt >0 & contb_receipt_amt < 2700) ,
+       aes(x=cand_nm, y=contb_receipt_amt)) + 
+  geom_boxplot() + 
+  coord_cartesian(ylim = c(0, 600))
+
+nm_pop <- dirty(nm_pop)
+```
+
+**Individual Popular Candidate Contributions Summary**
+```{r echo=FALSE, Zoomed_Candidate_Vs_Receipt_Plot_2}
+by(nm_pop$contb_receipt_amt,nm_pop$cand_nm, summary)
+```
+
+Zooming into the same graph, a few interesting quirks of the data reveal themselves. The first being that the median value for a lot of the candidates are similar round numbers such as $50 or $100. This is further example of how most people will contribute round amounts. The second is the outlier values, it is interesting to examine Bernard Sanders who has the most contributions, but a relatively small IQR means outliers appear above the $200 mark (an outlier is a point twice that of the IQR). Contrast that to Hillary Clinton with the next highest contributions and no outliers on this zoomed graph.
+
+I then chose to move on to two-way tables to simplify the data down and look at how many instances of contributions occurred. It should be noted that I chose to use my modified data frame of contributions only to the most popular candidates, nm_pop which excludes approximately 70 entries.
+
+In the later tables, I wanted to look at contributor employment status, however, the factors were very sporadic and I needed to modify these down to just five levels, Employed, Not Employed, Self Employed, Homemaker and Retired.
+
+The results, and the subsequent Chi-Squared Goodness of Fit test are as follows:
+
+**Two Way Table : Candidate Party / Candidate Gender**
+```{r echo=FALSE, Two-Way_Tables_1}
+nm_cp_cg_summary <- table(nm$cand_par,nm$cand_gen)
+nm_cp_cg_summary
+chisq.test(nm_cp_cg_summary) 
+```
+
+**Two Way Table : Candidate Party / Contributor Employment Status**
+```{r echo=FALSE, Two-Way_Tables_2}
+nm_ces_cp_summary <- table(nm_change_jobs$contbr_employer,
+                           nm_change_jobs$cand_par)
+nm_ces_cp_summary
+chisq.test(nm_ces_cp_summary) 
+```
+
+**Two Way Table : Candidate Gender / Contributor Employment Status**
+```{r echo=FALSE, Two-Way_Tables_3}
+nm_ces_cg_summary <- table(nm_change_jobs$contbr_employer,
+                           nm_change_jobs$cand_gen)
+nm_ces_cg_summary
+chisq.test(nm_ces_cg_summary) 
+```
+
+These two-way tables reveal some consistent correlations in the data. For one, we can see that donations from retired contributors tend to go Republican candidates and those contributors listing themselves as not employed tend to give to Democrat candidates. It is a lot harder to make correlations when it comes to the candidates gender however as the different parties have differing number of candidates that are female. 
+
+However it is interesting to note that almost all the 'not employed' contributors gave their contributions to a male candidate. We know these went almost exclusively to Democratic candidates, so, the obvious inference is that 'not employed' contributors are nearly all giving to Bernard Sanders, the only male Democrat in this modified dataset.
+
+
+**Bar graph of Contribution Amount vs Contribution Date**
+```{r echo=FALSE, Contribution_Amount_Date_Bar_Graph}
+ggplot(subset(nm_pop, contb_receipt_amt > 0), 
+       aes(x=contb_receipt_dt, y=log(contb_receipt_amt))) + 
+  geom_bar(stat="identity") + 
+  scale_x_date(breaks = date_breaks("8 weeks"), 
+               limits = c(as.Date("2015-04-01"), as.Date("2015-10-01")))
+```
+
+I moved onto plotting contribution receipts against when they occurred, and along with the large clump of contributions towards the end of June, as discussed earlier, two others have emerged. Feeling there may be some interesting things to find here, I began to plot some more.
+
+**Scatterplot of Contributions Data Around The Extreme Values**
+```{r echo=FALSE, Scatterplot_Extreme_Contributions}
+ggplot(data= nm_pop, aes(x=contb_receipt_dt, y= contb_receipt_amt, color=cand_nm)) + geom_point(alpha=0.5, aes(size=1)) + coord_cartesian(ylim = c(0, 100), xlim = c(as.Date("2015-04-01"), as.Date("2015-10-01"))) + facet_wrap(~cand_par, ncol = 1)
+
+ggplot(data= nm_pop, aes(x=contb_receipt_dt, y= contb_receipt_amt, color=cand_nm)) + geom_point(alpha=1, aes(size=1)) + coord_cartesian(ylim = c(900, 3000), xlim = c(as.Date("2015-04-01"), as.Date("2015-10-01"))) + facet_wrap(~cand_par, ncol = 1)
+```
+
+I decided to narrow in on the contribution amounts themselves and wanted to look at the extreme cases of the data, those between $0 and $100, as well as those between $900 and $3000.
+
+In the first graph, not a great deal of information pops up for the Republican candidates, but there is a very noticable pattern in the Democrat plot. While Hillary Rodham Clinton contributions are round amounts ($10, $50 etc) a lot of the contributions to Bernard Sanders are not. This suggests a difference in the types of contributors to their respective campaigns. It also confirms something I saw in the previous analysis of two-way tables, the two Democrat candidates are attracting support from very different groups. This is confirmed in the additional plot made below. Where the starkly different prodominant colours used show this very real divide.
+
+Again, in the second graph, there is not a great deal of information to be gleaned from the Republican candidates, other that they are most definetly not attracting the same sorts of large contributions that both the Democrat candidates are. However, this should not come as a surprise as, like before, the two-way tables show a distinct disproportions between the two parties support in this state.
+The Democrat plot does make one thing very clear, that Mrs Clinton is recieving much more of the large contributions than her opponent.
+
+**Scatterplot of Contributions Data By Employment Status Between Democrats**
+```{r echo=FALSE, Scatterplot_Individual_Contributions_By_Employment }
+ggplot(data= subset(nm_u_simplified, cand_par == "Democrat"), aes(x=contb_receipt_dt, y= contb_receipt_amt, color=contbr_employer)) + geom_point(alpha=0.5, aes(size=1)) + coord_cartesian(ylim = c(0, 250), xlim = c(as.Date("2015-04-01"), as.Date("2015-10-01"))) + facet_wrap(~cand_nm)
+```
+
+This plot is the conclusion of the trail of thought looking at where the contributions come from and where they go to. The green not-employed points overpower the Bernard Sanders plot whereas the red and blue (employed and retired respectively) dots are the prominent features of the Hillary Rodham Clinton plot.
+
+
+**Contributions By City**
+```{r echo=FALSE, City_Contribution_Candidate_Histogram}
+
+summary(nm_pop_other_cities$contbr_city)
+
+nm_pop_other_cities <- clean(nm_pop_other_cities)
+
+ggplot(data=nm_pop_other_cities, aes(x=cand_nm, fill=contbr_city)) +
+  geom_histogram() 
+
+nm_pop_other_cities <- dirty(nm_pop_other_cities)
+```
+
+I wanted to see if there was any connection between the city where the contribution came from and the candidate it went to. At first glance it seems a fairly even spread where the biggest contributing cities (Albuquerque at just over half, in this modified dataset looking at only the four highest contributing cities) contribute the most. 
+
+One thing that stands out here is that the Republican candidates tend to get a large proportion of their contributions from the 'other' cities, whereas the two Democrats get theirs mostly from the cities of Albuquerque and Santa Fe.
+
+However, there is one noticeable exception with Cruz who has a reasonably large following in Rio Rancho. I want to have a greater grasp on these proportions so I will plot another two-way table.
+
+**Two Way Table : Candidate / Contributor City**
+```{r echo=FALSE, Two-Way_Tables_4}
+nm_cn_cc_summary <- table(nm_simplified$contbr_city, nm_simplified$cand_nm)
+prop.table(nm_cn_cc_summary,2)
+```
+
+
+This two way table rather than uses counts, instead uses proportions to summarise the data, for example Benjamin S. Carson attracted 60.2% (3sf) of his contributions from cities in the 'other' category.
+
+As discussed before, the Republican and Democrat candidates get their contributions from differing sources. For the democrat candidates, the majority of their contributions came from the two largest cities of Albuquerque and Santa Fe. For the Republicans, the overwhelming majority of their contributions came from other, smaller cities. However, is this a coincidence, or a genuine relationship? For that I used another two way table and calculated a chi squared test, as seen below.
+
+**Two Way Table : Candidate Party / Contributor City**
+```{r echo=FALSE, Two-Way_Tables_5}
+nm_cc_cp_summary <- table(nm_simplified$contbr_city,nm_simplified$cand_par)
+
+nm_cc_cp_summary
+
+chisq.test(nm_cc_cp_summary)
+```
+
+As a reminder, the Chi-Squared test is a measurement of goodness of fit between the actual data set and what would be expected if the data was truly random. With such a small p-value we can be sure that this two way table, as a whole, can not be described with random variables. The larger cities do tend to give to Democrats more often and the smaller cities do tend to give to Republicans.
+
+## Bivariate Analysis
+
+### Talk about some of the relationships you observed in this part of the investigation. How did the feature(s) of interest vary with other features in the dataset?
+
+One relationship I found was looking at how occupation of the contributor affected the political party of the candidate that was being contributed to. By a considerable margin, those listing themselves as Retired contributed more to Republican candidates and those not listing an occupation, 'not employed' contributed to Democrat ones. This was confirmed with a chi-squared test producing a very small p-value.
+
+Another relationship was where the contributions were coming from, and who they went to. Again, by splitting the candidates into their political parties, and the cities into the four largest and the rest in a new factor level 'other' I was able to show an association between these two variables.
+
+### Did you observe any interesting relationships between the other features (not the main feature(s) of interest)?
+
+The most interesting relationship for me was looking at where the contribution came from, specifically which city and to which candidate it went to. For someone unfamiliar with the US political system it came as quite a shock to see such a remarkable difference in how Democrat and Republican candidates got their funding (larger cities like Albuquerque donating more to Democrat candidates and smaller cities collectively contributing to Republican ones.) The scale of the difference was not something I was expecting.
+
+It was also interesting to see the size of the contributions each candidate received, despite having one of the largest numbers, Bernard Sanders had the majority of his contributions below the $100 mark. Although there is no link between IQR and either party or gender it is still interesting to see how contributions are made. This can probably be attributed to so many of his contributions came from those describing themselves as 'not employed'.
+
+### What was the strongest relationship you found?
+
+The strongest relationship was whether being self-employed, retired or not employed affected which candidate was contributed to. It produced a chi-squared p-value small enough to not be recorded properly in R, and whilst not a surprise in the relationship, the strength of it, was.
+
+
+## Multivariate Plots Section
+
+**Cumulative Contribution Amount vs Contribution Date**
+```{r echo=FALSE, Proportion_Contribution_Date_By_Candidate}
+ggplot(nm_pop, aes(contb_receipt_dt, contb_receipt_amt, colour = cand_nm)) +
+  stat_ecdf() 
+
+ggplot(nm_pop, aes(contb_receipt_dt, contb_receipt_amt, colour = cand_nm)) +
+  stat_ecdf() + 
+  facet_wrap(~cand_nm)
+```
+
+To begin the multivariate section of this EDA I first looked at something that I have been putting off for a while, which was looking at when each candidate received their contributions. In these two graphs I plotted proportion of contributions against date and faceted by the candidates themselves. From this we can see candidates like Jeb Bush and Carly Fiorina have a much steeper curve indicating either a surge in interest for that candidate or just that they entered the contest much later then their rivals.
+
+It was at this point that I was about to call this line of thinking a 'dead end', there was not much information that could be drawn from this, however, I decided, as one last attempt, to slightly modify the graph. This time, instead I included what proportion of funding they received within each time slot of two weeks, compared to their party peers. The result follows.
+
+**Cumulative Contributions Over Time By Candidate**
+```{r echo=FALSE, Proportion_Contribution_Date_By_Candidate_Over_Period}
+ggplot(data= nm_cumu_cand, 
+       aes(x= cumu_period, y = cumu_total, color = cumu_name)) + 
+  geom_line()
+```
+
+**Proportion of Contributions Recieved Over Total Party Contribution Vs Time**
+```{r echo=FALSE, warning=FALSE, Proportion_Contribution_Over_Party_Contribution}
+ggplot(data= nm_cumu_cand, 
+       aes(x= cumu_period, y = cumu_total / cumu_period_total, 
+           color = cumu_name)) + 
+  geom_line() + 
+  facet_wrap(~cumu_par)
+```
+
+The top plot plots total contributions over time for each candidate, and it revealed a few things I was not expecting. Firstly how prominent Hillary Rodham Clintons cumulative funding was compared to the other candidates. Her large jump at the beginning of June correlates with her campaign launch speech of June 16 and was her first large scale event. The previous graphs, in their condensed forms had so far masked these patterns to me. Not only that, it reveals a spike in the cumulative total of Rafael Edward Cruz around the mid-Aug to September range. This will need to be looked at some more.
+
+However the bottom plot shows a much more interesting story, it looks at how much funding each candidate received compared to other members of their political party over time. On the Democrat side, it can be seen that initially Hillary Rodham Clinton received the vast bulk of the contributions, but more recently as time goes on, more and more of the contribution volume is going to Bernard Sanders.
+
+As for the Republicans we see a much more interactive story of ups and downs in the individual periods for each candidate. One of the more interesting drops was for Rand Paul in late May. Curious as to the reason for this a quick Google search shows that on May 20th Rand Paul had attempted a filibuster in the U.S Senate. Obviously without more data making a connection between this graph and political approval is risky, but it is interesting to see how this graph might have further applications to track political opinion.
+
+**2D Histogram of Contribution Amount vs Date**
+```{r echo=FALSE, Contribution_Amount_Date_2D_Histogram}
+
+ggplot(subset(nm_pop, contb_receipt_amt > 0 & contb_receipt_amt < 1000),
+       aes(x=contb_receipt_dt, y=contb_receipt_amt)) + 
+  geom_bin2d(bins=20) +
+  scale_x_date(breaks = date_breaks("8 weeks"), 
+               limits = c(as.Date("2015-05-11"), as.Date("2015-10-01")))
+
+ggplot(subset(nm_pop, contb_receipt_amt > 0 & contb_receipt_amt < 1000),
+       aes(x=contb_receipt_dt, y=contb_receipt_amt)) + 
+  geom_bin2d(bins=10) +
+  scale_x_date(breaks = date_breaks("8 weeks"), 
+               limits = c(as.Date("2015-06-21"), as.Date("2015-10-01"))) +
+  facet_wrap(~cand_nm)
+```
+
+However, that is not to say that we cannot look for any hotspots within the data as is, for example when using this 2-d histogram, which essentially clumps together points of a scatterplot of two variables into square bins, it effectively works as a heat map. The plot itself shows a gradual increase over time of both number of contributions and the amount those contributions are worth. It will be interesting to see in future editions of this dataset, whether this pattern continues indefinitely or plateaus out. Unfortunately this graphs doesn't seem to show any new information and this may be the end of the road for this particular line of investigation.
+
+**Sources of Candidates Contributions by City over Time**
+```{r echo=FALSE, Multivariate_Plots}
+ggplot(nm_pop_other_cities,
+       aes(x=contb_receipt_dt,color=contbr_city)) +
+  geom_step(aes(y=contb_receipt_amt),stat="ecdf") + 
+  facet_wrap(~cand_nm) + 
+  coord_cartesian(xlim=c(as.Date("2015-04-01"), as.Date("2015-10-01")))
+```
+
+Finally I decided to see if I could find a link between how the individual candidates contributions fluctuated in different cities over time. Plotting the cumulative contributed amount against the receipt date and faceting over candidate, we can see a couple of interesting quirks of the data. Rio Rancho, a city I mentioned before as being a bit of an outlier in preferring the Republican candidates, can be seen to be a lot slower in their contributions to the Democrats. However, again, without more quantitative data, the end of the road has been reached.
+
+**Linear Model Attempt - Predicting Contribution Amount**
+```{r echo=FALSE, Linear_Model}
+nm_cov_fit = lm(nm_simplified$contb_receipt_amt ~ nm_simplified$cand_par +
+                  nm_simplified$contbr_employer + 
+                  nm_simplified$contbr_city + 
+                  nm_simplified$cand_gen)
+
+nm_cov_fit
+
+summary(nm_cov_fit)
+```
+
+**Generalised Model Attempt - Predicting Contributors Political Affiliration**
+```{r echo=FALSE, Generalised_Linear_Model}
+nm_logis_fit_u <- glm(cand_par ~ contbr_employer + contbr_city, 
+                      data = nm_u_simplified, family = "binomial")
+
+summary(nm_logis_fit_u)
+```
+
+**Chi-Squared P-Value Matching Real Data to Model**
+```{r echo=FALSE, P-Value_GLM}
+1 - pchisq(deviance(nm_logis_fit_u), df.residual(nm_logis_fit_u))
+```
+
+
+Finally I wanted to see if I could create a model for this data. At first I tried modelling the contribution amount, as it was the only workable continuous variable. With all the tinkering and playing around with variables, the highest R-Squared value I could get was 0.16, which is not surprising in hindsight, because how much people give will depend on circumstances entirely independent of their political leanings etc. This was clearly not going to be a fruitful venture.
+
+So I moved on to the slightly more difficult subject of trying to create a model to predict a discrete factor variable, in this case, trying to predict to which political party someone would donate, given their employment status and which city they were in. At first it gave some promising results, a lot of coefficients ended up being significant, but, using a goodness of fit test, I couldn't get the data and the model to have a p-value greater than 0.05 (so as to say that there is no significant difference between the two). 
+
+Feeling somewhat frustrated, I decided to remove the drag on the model which were the 'Homemaker' employment status, which in hindsight adding in may have not have been so smart as they were a small subset of the not-employed group. Also, I chose a different test of fit, as the Hosmer-Lemeshow Goodness of Fit test is not reliable with large data sets, and instead picked a Chi-Squared Residuals test. Producing a p-value of 0.855, which suggests no evidence of a lack of fit between the model and the data.
+
+Unfortunately this test does not show that the model is a good fit, only that there is no evidence to the contrary, and would need to go along with other tests to see how reliable it actually is.
+
+
+
+## Multivariate Analysis
+
+### Talk about some of the relationships you observed in this part of the investigation. Were there features that strengthened each other in terms of looking at your feature(s) of interest?
+
+By pulling in multiple variables a greater story can be told of the data. For example by looking at the proportion of contributions a candidate received within a given fortnight compared to the whole parties contributions I was able to establish long term patterns. One such was seeing how some initial frontrunners (in terms of volume of contributions) were slowly losing that edge, as in the case of Bernard Sanders vs Hillary Rodham Clinton.
+
+It also revealed an underlying feature of the dataset I had yet to uncover, in how far ahead Hillary Rodham Clinton was in volume of contributions. This discovery led to asking more questions about volume over time.
+
+### Were there any interesting or surprising interactions between features?
+
+One of the surprising interactions for me was how, potentially, I was able to use the comparative volumes of contributions to be able to see when a particular candidate was more popular, or in the example before, less so. Rand Paul had an unusual dip in his proportion of Republican contributions in late May, which, with a quick Google search I was able to trace back to a real life event. The data had the power to show these real life events happening.
+
+### OPTIONAL: Did you create any models with your dataset? Discuss the strengths and limitations of your model.
+
+I did attempt to create a model, but with only one usable quantitative variable which really didn't have much to do with the other qualitative ones, I had to instead try to make a model that predicted a discrete variable. One of its strengths is because of the harsh modifications and simplifications I made to the data, a lot of the coefficients in the model were statistically significant. However, this in turn reveals the biggest weakness to the model, because it is so heavily modified, making any conclusions from this model are risky at best.
+
+------
+
+# Final Plots and Summary
+
+### Plot One
+```{r echo=FALSE, Plot_One}
+nm_pop_other_cities <- clean(nm_pop_other_cities)
+
+ggplot(data=nm_pop_other_cities, aes(x=cand_nm, fill=contbr_city)) +
+  geom_histogram() + 
+  xlab('Candidate Name') + 
+  ylab('Number of contributions') +
+  scale_fill_discrete(name="Contributor City", 
+                      breaks=c("ALBUQUERQUE",
+                               "LAS CRUCES",
+                               "RIO RANCHO",
+                               "SANTA FE",
+                               "OTHER")) + 
+  ggtitle("Origins of Contributions by Candidate") + 
+  theme(plot.title = element_text(lineheight=1.2, face="bold"))
+
+nm_pop_other_cities <- dirty(nm_pop_other_cities)
+```
+
+### Description One
+
+This graphs not only identifies one of the most interesting trends of the dataset as a whole but at the same time gives the reader a glimpse into the makeup of the data too. The large green chunks of each candidates bars are related to the 'Other' category. This indicates that whilst the majority of the contributions came from just four cities, there are still a sizable amount that came from many different smaller ones.
+
+There are also four main frontrunners in terms of contributions, Bernard Sanders, who recieved 1063 contributions (in this modified version of the dataset), Hillary Rodham Clinton (698), Rafael Edward Cruz (573) and Benjamin S. Carson (551).
+
+Knowing that, it is clear to see that whilst all the candidates receive contributions from the smaller cities, it is the Republican candidates that receive the greater proportion. Likewise the Democrat candidates receive most of their contributions from the larger cities. For example, Benjamin S. Carson recieved 58.8% of his contributions from the 'Other' group, whereas Hillary Rodham Clinton recieved just 25.4% (3sf) from this same group.
+
+This is one of the most prevalent and interesting stories this dataset shows and I feel this plot is the best one to both simultaneously show that and still allow for individual comparison of candidates.
+
+### Plot Two
+```{r echo=FALSE, warning=FALSE, Plot_Two}
+ggplot(data= nm_cumu_cand, 
+       aes(x= cumu_period, y = cumu_total / cumu_period_total, 
+           color = cumu_name)) + 
+  geom_line(size=1) + 
+  ggtitle("Proportion of Recieved Contributions Per Candidate Over Time") +
+  facet_grid(cumu_par ~ ., scales="free_y") + 
+  theme(plot.title = element_text(hjust=0, face="bold")) + 
+  xlab('Date (in days)') + 
+  ylab('Propotion of Contributions Recieved') +
+  scale_color_discrete(name="Candidate Name")
+```
+
+### Description Two
+
+Another one of the big trends shown in this dataset relates to how, over time, the contributions shift between candidates. The reasons for why this happens cannot be explain by a plot alone, but by seeing its dips and trends it allows for a user to identify key moments in the electoral process.
+
+This is best shown in this graph, which plots the proportion of total contributions each candidate received within their own party against time. Essentially it says, within each time frame of two weeks, how much contribution did a candidate receive compared to their party peers.
+
+Both facets of this graph tell their own story, for the Democrats it shows clearly that in the beginning of the campaign, Hillary Rodham Clinton received nearly all of the Democrat contributions, but, as the months have gone by Bernard Sanders has been steadily taking ground. A clear view of the realities of the campaign where Bernard Sanders has been slowly increasing in exposure.
+
+On the Republican side, the plot can be seen as a reflection as the peaks and troughs of the graph are borne out in the real world. For example an early dip in the contributions of Rand Paul match precisely with a unfavourable political filibuster. Similarly Rafael Edward Cruz had a large spike upwards in contributions from mid August, which in turn match with a very public 'success' in the Ohio Republican Debate of early August. His proportional contributions rose from 37.7% in the fortnight ending 19th August to 50.1% in the fornight ending 2nd September.
+
+This graph shows, better than any other how the contribution data can be seen as a real time popularity in a very clear way.
+
+
+### Plot Three
+```{r echo=FALSE, Plot_Three}
+nm_pop <- clean(nm_pop)
+
+ggplot(data=subset(nm_pop,contb_receipt_amt >0 & contb_receipt_amt < 2700) , 
+       aes(x=cand_nm, y=contb_receipt_amt)) + 
+  geom_boxplot() + 
+  coord_cartesian(ylim = c(0, 800)) + 
+  ggtitle("Boxplots of Contributions to Candidates") + 
+  stat_summary(fun.y= mean, colour="grey", geom="point",
+               shape=19, size=3, show_guide = TRUE) + 
+  xlab('Candidate Name') + 
+  ylab('Contribution Amount (in Dollars)') + 
+  theme(plot.title = element_text(hjust=0.5, face="bold")) + 
+  geom_point(aes(shape = "Mean"), alpha = 0) +
+  guides(shape=guide_legend(title="Boxplot Mean", 
+                            override.aes = list(alpha = 0.25)))
+nm_pop <- dirty(nm_pop)
+```
+
+### Description Three
+
+Finally I wanted to show the audience about the make-up of the contributions themselves and that all contributions are not equal. This boxplot addresses both of these whilst also showing a few extra bits of information too.
+
+Firstly, by knowledge of the second plot above, Hillary Rodham Clinton has the most contributions by volume but that is being eroded away by Bernard Sanders. However what is interesting is that the range of his contributions is very low, 75% of his contributions are less that $100 or less. In order to be making gains on Clinton (especially with a much greater mean and median contributions) the number of times he has been contributed to must be large. This also infers knowledge of the types of contributors to his campaign.
+
+Contrast this with, for example Jeb Bush, with a much higher IQR, Median and Mean (Bush IQR: 650, Sanders IQR: 75.66, Bush Median: 250.0, Sanders Median: 50.0, Bush Mean: 632.4, Sanders Mean: 122.5,), we know, from plot one, that he is getting few contributions, but big ones, and from plot two that these are adding up to be a sizable chunk of the overall Republican contribution. It is easy to put together a picture of the wealthier minority putting large contributions in.
+
+This graph is the best way to show comparisons between contributions, their candidates and how different campaigns are acquiring donations and is the first time that individual size of the contributions has been addressed in this analysis.
+
+------
+
+# Reflection
+
+As a non US citizen, I knew very little about both the political process and the real time political backstory that this data is a product of. This lead to me most likely having a different approach in my EDA to most as I had a vague idea of how different subgroups of people are likely to contribute but it was all mostly new. For me, all the discoveries I made were genuine, whereas having pre conceived ideas might have narrowed my focus and I may have missed something.
+
+Thats not to say the dataset was easy to work with, having only one continuous variable, along with one date variable and the rest being factors/discrete variables led to a lot of head scratching. Slowly, as the EDA went on, I added more variables in, as well as heavily edited the data as a whole to create something workable.
+
+I found most of my success in the Two-Way tables which compared discrete variables and how they matched up, for example 'Retired' tended to contribute to Republican candidates and 'Not-Employed' to Democrats. These trends and patterns opened up a lot of alleyways to explore, and its biggest breakthrough was the 'Proportion of Received Contributions Per Candidate Over Time' graph, acting as a makeshift popularity gauge.
+
+One of the greatest lessons I learnt through doing this EDA was how taking each piece of data as a stand alone value will not yield much information. Instead by correlating it to other variables or even aggregating it, a lot more information can be gleaned as you take a higher vantage point of what you are looking at.
+
+That does not mean I didn't run into a lot of dead ends though, especially with trying to find a correlation of the timing of contributions with anything over than the value of them themselves. Trying to see if certain cities or employment status had an impact on contributions long term ended up being a very long rabbit hole that produced nothing. This too was a lesson I learnt, not everything has to have a correlation.
+
+However, despite the success I had with this analysis, you do have to take a step back and ask the question of 'but is this finding credible?' I have made a lot of editing choices, from very heavily modifying the dataframe, taking out observations from less popular candidates and also editing what their employment status is. All have an impact on the conclusions drawn but none more so then the last, by making a personal subjective choice, I assigned each contribution a newly created factor level and you have to question whether I made the right assumptions and if the dataset can be trusted as a result.
+
+On a final note, I want to address how future work can build on this EDA. There are two things that in my opinion will be interesting to return to. Firstly, with more data observations, more candidates may be included for analysis which may an even greater different in how different candidates campaigns are run. Secondly to see if the party proportional contributions change, and if they can be robustly matched to opinion polls to see if this dataset really can be used to demonstrate real world popularity and make predictions going forward.
